@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sleep">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-192.webp">
+<title>Sleep</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    background: #0a0a0f;
+    color: #e8e6e3;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3rem;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  h1 {
+    font-size: 1.1rem;
+    font-weight: 400;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #6b6862;
+    text-align: center;
+    line-height: 1.8;
+  }
+  h1 .dim { color: #3d3b37; }
+  #playBtn {
+    width: 170px; height: 170px;
+    border-radius: 50%;
+    border: 1px solid #2a2933;
+    background: radial-gradient(circle at 35% 30%, #17171f, #0d0d13);
+    color: #cfc9c0;
+    font-size: 0.95rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: transform .3s ease, box-shadow .6s ease, border-color .6s ease;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  #playBtn:active { transform: scale(0.96); }
+  #playBtn.playing {
+    border-color: #4a4860;
+    box-shadow: 0 0 60px rgba(90, 85, 140, 0.25), inset 0 0 40px rgba(70, 65, 110, 0.12);
+    animation: breathe 6s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 45px rgba(90,85,140,0.18), inset 0 0 35px rgba(70,65,110,0.10); }
+    50% { box-shadow: 0 0 75px rgba(90,85,140,0.32), inset 0 0 45px rgba(70,65,110,0.16); }
+  }
+  #status {
+    font-size: 0.75rem;
+    color: #4a4844;
+    letter-spacing: 0.12em;
+    min-height: 1.2em;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <h1>Fall asleep to <span class="dim">not hearing</span><br>the president talk</h1>
+  <button id="playBtn" aria-label="Play">Play</button>
+  <div id="status"></div>
+
+<script>
+  const btn = document.getElementById('playBtn');
+  const status = document.getElementById('status');
+  let playing = false;
+  let wakeLock = null;
+  let audioCtx = null;
+  let buffer = null;
+  let srcNode = null;
+  let gainNode = null;
+  let currentGain = 0;   // .value doesn't reflect scheduled automation; track it ourselves
+
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (e) { /* fine without it */ }
+  }
+
+  // Plays the recorded room tone (/sleep_track.wav) via Web Audio:
+  // decoded once, looped sample-accurately, fades in JS. No generated noise.
+  async function getBuffer() {
+    if (!buffer) {
+      const res = await fetch('/sleep_track.wav?v=9');
+      const arr = await res.arrayBuffer();
+      buffer = await audioCtx.decodeAudioData(arr);
+    }
+    return buffer;
+  }
+
+  async function start() {
+    await getBuffer();
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;                    // sample-accurate wrap of the real recording
+    const g = audioCtx.createGain();
+    g.gain.value = 0;
+    src.connect(g).connect(audioCtx.destination);
+    const t = audioCtx.currentTime;
+    // 3s smooth S-curve fade-in (no abrupt knee at either end)
+    const N = 64;
+    const curve = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const p = i / (N - 1);
+      curve[i] = 2.4 * (p * p * (3 - 2 * p));   // smoothstep
+    }
+    g.gain.setValueCurveAtTime(curve, t, 3);
+    currentGain = 2.4;
+    src.start(0);
+    srcNode = src; gainNode = g;
+  }
+
+  function stop() {
+    if (!srcNode) return;
+    const t = audioCtx.currentTime;
+    const node = srcNode, gn = gainNode;
+    gn.gain.cancelScheduledValues(t);
+    // 3s smooth S-curve fade-out from the CURRENT level, then stop
+    const N = 64;
+    const curve = new Float32Array(N);
+    const v0 = currentGain;
+    for (let i = 0; i < N; i++) {
+      const p = i / (N - 1);
+      const s = p * p * (3 - 2 * p);
+      curve[i] = v0 * (1 - s);
+    }
+    gn.gain.setValueCurveAtTime(curve, t, 3);
+    currentGain = 0;
+    node.stop(t + 3.1);
+    srcNode = null; gainNode = null;
+  }
+
+  btn.addEventListener('click', async () => {
+    if (!playing) {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        await start();
+        playing = true;
+        btn.textContent = 'Stop';
+        btn.classList.add('playing');
+        status.textContent = '';
+        requestWakeLock();
+      } catch (err) {
+        console.error('start failed:', err);
+        playing = false;
+        status.textContent = 'tap again to allow audio';
+      }
+    } else {
+      stop();
+      playing = false;
+      btn.textContent = 'Play';
+      btn.classList.remove('playing');
+      status.textContent = '';
+      if (wakeLock) { wakeLock.release().catch(()=>{}); wakeLock = null; }
+    }
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && playing) requestWakeLock();
+  });
+</script>
+</body>
+</html>

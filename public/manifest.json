@@ -1,0 +1,14 @@
+{
+  "name": "Sleep — Not Hearing the President",
+  "short_name": "Sleep",
+  "description": "Fall asleep to the beautiful sound of nothing.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon-192.webp", "sizes": "192x192", "type": "image/webp" },
+    { "src": "/icon-512.webp", "sizes": "512x512", "type": "image/webp" }
+  ]
+}
